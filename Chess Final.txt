@@ -1,0 +1,597 @@
+#include <SFML/Graphics.hpp>
+#include <vector>
+#include <iostream>
+#include <cmath>
+#include <optional>
+
+using namespace sf;
+using namespace std;
+
+// Tile Size for a more compact board (640x640 window)
+const int TILE_SIZE = 80;
+const int BOARD_SIZE = 8;
+
+class Piece {
+protected:
+    Sprite sprite;
+    bool isWhite;
+    bool hasMoved;
+    int x, y;
+
+public:
+    Piece(Texture& texture, bool white, int startX, int startY)
+        : sprite(texture), isWhite(white), x(startX), y(startY) {
+
+        hasMoved = false;
+
+        Vector2u texSize = texture.getSize();
+        float scaleX = (float)TILE_SIZE / texSize.x;
+        float scaleY = (float)TILE_SIZE / texSize.y;
+
+        sprite.setScale(Vector2f(scaleX, scaleY));
+
+        updatePosition();
+    }
+
+    virtual ~Piece() {}
+
+    virtual string getName() const = 0;
+
+    virtual bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) = 0;
+
+    void setPosition(int newX, int newY) {
+        x = newX;
+        y = newY;
+        updatePosition();
+    }
+
+    void updatePosition() {
+        sprite.setPosition(Vector2f((float)x * TILE_SIZE, (float)y * TILE_SIZE));
+    }
+
+    void markMoved() { hasMoved = true; }
+    bool getHasMoved() const { return hasMoved; }
+
+    void draw(RenderWindow& window) {
+        window.draw(sprite);
+    }
+
+    void drawAt(RenderWindow& window, Vector2f pos) {
+        Vector2f oldPos = sprite.getPosition();
+        sprite.setPosition(pos);
+        window.draw(sprite);
+        sprite.setPosition(oldPos);
+    }
+
+    bool getIsWhite() const { return isWhite; }
+    int getX() const { return x; }
+    int getY() const { return y; }
+};
+
+// 2. DERIVED CLASSES
+
+class Pawn : public Piece {
+public:
+    Pawn(Texture& tex, bool white, int x, int y) : Piece(tex, white, x, y) {}
+
+    string getName() const override { return "Pawn"; }
+
+    bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) override {
+        int direction = isWhite ? -1 : 1;
+        int diffY = toY - y;
+        int diffX = toX - x;
+
+        if (diffX == 0 && diffY == direction && board[toY][toX] == nullptr) return true;
+
+        if (diffX == 0 && diffY == 2 * direction && board[toY][toX] == nullptr && board[y + direction][x] == nullptr) {
+            if ((isWhite && y == 6) || (!isWhite && y == 1)) return true;
+        }
+
+        if (abs(diffX) == 1 && diffY == direction && board[toY][toX] != nullptr) {
+            if (board[toY][toX]->getIsWhite() != isWhite) return true;
+        }
+
+        if (abs(diffX) == 1 && diffY == direction && board[toY][toX] == nullptr) {
+            if (toX == enPassantTarget.x && toY == enPassantTarget.y) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+};
+
+class Rook : public Piece {
+public:
+    Rook(Texture& tex, bool white, int x, int y) : Piece(tex, white, x, y) {}
+
+    string getName() const override { return "Rook"; }
+
+    bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) override {
+        if (x != toX && y != toY) return false;
+        int xDir = (toX == x) ? 0 : (toX > x ? 1 : -1);
+        int yDir = (toY == y) ? 0 : (toY > y ? 1 : -1);
+        int currX = x + xDir, currY = y + yDir;
+        while (currX != toX || currY != toY) {
+            if (board[currY][currX] != nullptr) return false;
+            currX += xDir; currY += yDir;
+        }
+        if (board[toY][toX] != nullptr && board[toY][toX]->getIsWhite() == isWhite) return false;
+        return true;
+    }
+};
+
+class Knight : public Piece {
+public:
+    Knight(Texture& tex, bool white, int x, int y) : Piece(tex, white, x, y) {}
+
+    string getName() const override { return "Knight"; }
+
+    bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) override {
+        int dx = abs(toX - x);
+        int dy = abs(toY - y);
+        if (!((dx == 2 && dy == 1) || (dx == 1 && dy == 2))) return false;
+        if (board[toY][toX] != nullptr && board[toY][toX]->getIsWhite() == isWhite) return false;
+        return true;
+    }
+};
+
+class Bishop : public Piece {
+public:
+    Bishop(Texture& tex, bool white, int x, int y) : Piece(tex, white, x, y) {}
+
+    string getName() const override { return "Bishop"; }
+
+    bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) override {
+        if (abs(toX - x) != abs(toY - y)) return false;
+        int xDir = (toX > x) ? 1 : -1;
+        int yDir = (toY == y) ? 1 : -1;
+        int currX = x + xDir, currY = y + yDir;
+        while (currX != toX && currY != toY) {
+            if (board[currY][currX] != nullptr) return false;
+            currX += xDir; currY += yDir;
+        }
+        if (board[toY][toX] != nullptr && board[toY][toX]->getIsWhite() == isWhite) return false;
+        return true;
+    }
+};
+
+class Queen : public Piece {
+public:
+    Queen(Texture& tex, bool white, int x, int y) : Piece(tex, white, x, y) {}
+
+    string getName() const override { return "Queen"; }
+
+    bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) override {
+        bool straight = (x == toX || y == toY);
+        bool diagonal = (abs(toX - x) == abs(toY - y));
+        if (!straight && !diagonal) return false;
+        int xDir = (toX == x) ? 0 : (toX > x ? 1 : -1);
+        int yDir = (toY == y) ? 0 : (toY > y ? 1 : -1);
+        int currX = x + xDir, currY = y + yDir;
+        while (currX != toX || currY != toY) {
+            if (board[currY][currX] != nullptr) return false;
+            currX += xDir; currY += yDir;
+        }
+        if (board[toY][toX] != nullptr && board[toY][toX]->getIsWhite() == isWhite) return false;
+        return true;
+    }
+};
+
+class King : public Piece {
+public:
+    King(Texture& tex, bool white, int x, int y) : Piece(tex, white, x, y) {}
+
+    string getName() const override { return "King"; }
+
+    bool isValidMove(int toX, int toY, Piece* board[8][8], Vector2i enPassantTarget) override {
+        int dx = abs(toX - x);
+        int dy = abs(toY - y);
+
+        if (dx <= 1 && dy <= 1) {
+            if (board[toY][toX] != nullptr && board[toY][toX]->getIsWhite() == isWhite) return false;
+            return true;
+        }
+
+        // CASTLING
+        if (dx == 2 && dy == 0 && !hasMoved) {
+            int rookX = (toX > x) ? 7 : 0;
+            Piece* rook = board[y][rookX];
+            if (rook != nullptr && rook->getName() == "Rook" &&
+                rook->getIsWhite() == isWhite && !rook->getHasMoved()) {
+
+                int step = (toX > x) ? 1 : -1;
+                for (int k = x + step; k != rookX; k += step) {
+                    if (board[y][k] != nullptr) return false;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+// 3. BOARD CLASS
+class Board {
+private:
+    Piece* grid[8][8];
+    Texture textures[12];
+    bool isWhiteTurn;
+    bool gameOver;
+
+    Vector2i enPassantTarget;
+    Vector2i selectedTile;
+    vector<Vector2i> possibleMoves;
+
+    void loadTextures() {
+        string files[] = {
+            "chess_piece_2_black_pawn.png", "chess_piece_2_black_rook.png", "chess_piece_2_black_knight.png",
+            "chess_piece_2_black_bishop.png", "chess_piece_2_black_queen.png", "chess_piece_2_black_king.png",
+            "chess_piece_2_white_pawn.png", "chess_piece_2_white_rook.png", "chess_piece_2_white_knight.png",
+            "chess_piece_2_white_bishop.png", "chess_piece_2_white_queen.png", "chess_piece_2_white_king.png"
+        };
+        for (int i = 0; i < 12; i++) {
+            if (!textures[i].loadFromFile(files[i])) cerr << "Error loading " << files[i] << endl;
+            else textures[i].setSmooth(true);
+        }
+    }
+
+    bool isSquareAttacked(int sqX, int sqY, bool byWhite) {
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                Piece* p = grid[j][i];
+                if (p != nullptr && p->getIsWhite() == byWhite) {
+                    if (p->isValidMove(sqX, sqY, grid, Vector2i(-1, -1))) return true;
+
+                    if (p->getName() == "Pawn") {
+                        int dir = p->getIsWhite() ? -1 : 1;
+                        if (abs(sqX - p->getX()) == 1 && (sqY - p->getY()) == dir) return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    bool isKingInCheck(bool whiteKing) {
+        Vector2i kingPos(-1, -1);
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                if (grid[j][i] != nullptr && grid[j][i]->getIsWhite() == whiteKing && grid[j][i]->getName() == "King") {
+                    kingPos = Vector2i(i, j); break;
+                }
+            }
+        }
+        if (kingPos.x == -1) return false;
+        return isSquareAttacked(kingPos.x, kingPos.y, !whiteKing);
+    }
+
+    bool isCheckmate(bool whiteKing) {
+        if (!isKingInCheck(whiteKing)) return false;
+
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+                Piece* p = grid[y][x];
+                if (p != nullptr && p->getIsWhite() == whiteKing) {
+                    for (int ty = 0; ty < 8; ty++) {
+                        for (int tx = 0; tx < 8; tx++) {
+                            if (p->isValidMove(tx, ty, grid, enPassantTarget)) {
+                                Piece* captured = grid[ty][tx];
+                                grid[ty][tx] = p;
+                                grid[y][x] = nullptr;
+                                bool stillInCheck = isKingInCheck(whiteKing);
+                                grid[y][x] = p;
+                                grid[ty][tx] = captured;
+                                if (!stillInCheck) return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    int showPromotionMenu(RenderWindow& window, bool isWhite) {
+        int baseIdx = isWhite ? 6 : 0;
+
+        vector<Sprite> options;
+        options.reserve(4);
+
+        options.emplace_back(textures[baseIdx + 4]);
+        options.emplace_back(textures[baseIdx + 1]);
+        options.emplace_back(textures[baseIdx + 3]);
+        options.emplace_back(textures[baseIdx + 2]);
+
+        RectangleShape bg(Vector2f(400, 120));
+        bg.setFillColor(Color(50, 50, 50, 230));
+        bg.setOutlineColor(Color::White);
+        bg.setOutlineThickness(2);
+
+        float menuX = (BOARD_SIZE * TILE_SIZE - 400) / 2.0f;
+        float menuY = (BOARD_SIZE * TILE_SIZE - 120) / 2.0f;
+        bg.setPosition(Vector2f(menuX, menuY));
+
+        for (int i = 0; i < 4; i++) {
+            options[i].setScale(Vector2f(1.5f, 1.5f));
+            options[i].setPosition(Vector2f(menuX + 20 + i * 100, menuY + 15));
+        }
+
+        while (window.isOpen()) {
+            while (const auto ev = window.pollEvent()) {
+                if (ev->is<Event::Closed>()) { window.close(); return 0; }
+            }
+
+            if (Mouse::isButtonPressed(Mouse::Button::Left)) {
+                Vector2i mouse = Mouse::getPosition(window);
+                for (int i = 0; i < 4; i++) {
+                    if (options[i].getGlobalBounds().contains(Vector2f((float)mouse.x, (float)mouse.y))) {
+                        return i;
+                    }
+                }
+            }
+
+            window.clear();
+            draw(window);
+            window.draw(bg);
+            for (int i = 0; i < 4; i++) window.draw(options[i]);
+            window.display();
+        }
+        return 0;
+    }
+
+public:
+    Board() {
+        loadTextures();
+        isWhiteTurn = true;
+        gameOver = false;
+        enPassantTarget = Vector2i(-1, -1);
+        selectedTile = Vector2i(-1, -1);
+        for (int i = 0; i < 8; i++) for (int j = 0; j < 8; j++) grid[i][j] = nullptr;
+        setupBoard();
+    }
+
+    ~Board() {
+        for (int i = 0; i < 8; i++) for (int j = 0; j < 8; j++) delete grid[i][j];
+    }
+
+    void setupBoard() {
+        for (int i = 0; i < 8; i++) {
+            grid[1][i] = new Pawn(textures[0], false, i, 1);
+            grid[6][i] = new Pawn(textures[6], true, i, 6);
+        }
+        grid[0][0] = new Rook(textures[1], false, 0, 0); grid[0][7] = new Rook(textures[1], false, 7, 0);
+        grid[0][1] = new Knight(textures[2], false, 1, 0); grid[0][6] = new Knight(textures[2], false, 6, 0);
+        grid[0][2] = new Bishop(textures[3], false, 2, 0); grid[0][5] = new Bishop(textures[3], false, 5, 0);
+        grid[0][3] = new Queen(textures[4], false, 3, 0); grid[0][4] = new King(textures[5], false, 4, 0);
+        grid[7][0] = new Rook(textures[7], true, 0, 7);  grid[7][7] = new Rook(textures[7], true, 7, 7);
+        grid[7][1] = new Knight(textures[8], true, 1, 7);  grid[7][6] = new Knight(textures[8], true, 6, 7);
+        grid[7][2] = new Bishop(textures[9], true, 2, 7);  grid[7][5] = new Bishop(textures[9], true, 5, 7);
+        grid[7][3] = new Queen(textures[10], true, 3, 7); grid[7][4] = new King(textures[11], true, 4, 7);
+    }
+
+    void handleInput(RenderWindow& window) {
+        if (gameOver) return;
+
+        if (Mouse::isButtonPressed(Mouse::Button::Left)) {
+            Vector2i pos = Mouse::getPosition(window);
+            int x = pos.x / TILE_SIZE;
+            int y = pos.y / TILE_SIZE;
+
+            if (x < 0 || x >= 8 || y < 0 || y >= 8) return;
+
+            if (selectedTile.x == -1) {
+                if (grid[y][x] != nullptr && grid[y][x]->getIsWhite() == isWhiteTurn) {
+                    selectedTile = Vector2i(x, y);
+                    calculatePossibleMoves(x, y);
+                }
+            }
+            else {
+                bool validMove = false;
+                for (auto m : possibleMoves) if (m.x == x && m.y == y) validMove = true;
+
+                if (validMove) {
+                    Piece* p = grid[selectedTile.y][selectedTile.x];
+                    cout << (isWhiteTurn ? "White " : "Black ") << p->getName()
+                        << " moves to (" << x << ", " << y << ")";
+
+                    if (p->getName() == "King" && abs(x - selectedTile.x) == 2) cout << " (CASTLING!)";
+                    cout << endl;
+
+                    movePiece(selectedTile.x, selectedTile.y, x, y, window);
+                    isWhiteTurn = !isWhiteTurn;
+
+                    if (isKingInCheck(isWhiteTurn)) {
+                        if (isCheckmate(isWhiteTurn)) {
+                            cout << "### CHECKMATE! GAME OVER ###" << endl;
+                            gameOver = true;
+                        }
+                        else {
+                            cout << "!!! CHECK !!!" << endl;
+                        }
+                    }
+                    selectedTile = Vector2i(-1, -1);
+                    possibleMoves.clear();
+                }
+                else {
+                    if (grid[y][x] != nullptr && grid[y][x]->getIsWhite() == isWhiteTurn) {
+                        selectedTile = Vector2i(x, y);
+                        calculatePossibleMoves(x, y);
+                    }
+                    else {
+                        selectedTile = Vector2i(-1, -1);
+                        possibleMoves.clear();
+                    }
+                }
+            }
+            while (Mouse::isButtonPressed(Mouse::Button::Left));
+        }
+    }
+
+    void movePiece(int fromX, int fromY, int toX, int toY, RenderWindow& window) {
+        Piece* p = grid[fromY][fromX];
+        bool isEnPassantMove = false;
+
+        if (p->getName() == "Pawn" && toX == enPassantTarget.x && toY == enPassantTarget.y) {
+            int captureY = (p->getIsWhite()) ? toY + 1 : toY - 1;
+            delete grid[captureY][toX];
+            grid[captureY][toX] = nullptr;
+            isEnPassantMove = true;
+            cout << "En Passant Capture!" << endl;
+        }
+
+        if (p->getName() == "Pawn" && abs(toY - fromY) == 2) {
+            enPassantTarget = Vector2i(fromX, (fromY + toY) / 2);
+        }
+        else {
+            enPassantTarget = Vector2i(-1, -1);
+        }
+
+        if (p->getName() == "King" && abs(toX - fromX) == 2) {
+            int rookOldX = (toX > fromX) ? 7 : 0;
+            int rookNewX = (toX > fromX) ? toX - 1 : toX + 1;
+            Piece* rook = grid[toY][rookOldX];
+            grid[toY][rookNewX] = rook;
+            grid[toY][rookOldX] = nullptr;
+            rook->setPosition(rookNewX, toY);
+            rook->markMoved();
+        }
+
+        if (grid[toY][toX] != nullptr && !isEnPassantMove) delete grid[toY][toX];
+
+        grid[toY][toX] = p;
+        grid[fromY][fromX] = nullptr;
+        grid[toY][toX]->setPosition(toX, toY);
+        p->markMoved();
+
+        Pawn* pawn = dynamic_cast<Pawn*>(grid[toY][toX]);
+        if (pawn) {
+            if ((pawn->getIsWhite() && toY == 0) || (!pawn->getIsWhite() && toY == 7)) {
+                bool white = pawn->getIsWhite();
+                int choice = showPromotionMenu(window, white);
+
+                delete grid[toY][toX];
+                if (choice == 0) grid[toY][toX] = new Queen(textures[white ? 10 : 4], white, toX, toY);
+                if (choice == 1) grid[toY][toX] = new Rook(textures[white ? 7 : 1], white, toX, toY);
+                if (choice == 2) grid[toY][toX] = new Bishop(textures[white ? 9 : 3], white, toX, toY);
+                if (choice == 3) grid[toY][toX] = new Knight(textures[white ? 8 : 2], white, toX, toY);
+
+                cout << "Pawn promoted!" << endl;
+            }
+        }
+    }
+
+    void calculatePossibleMoves(int x, int y) {
+        possibleMoves.clear();
+        Piece* p = grid[y][x];
+        if (!p) return;
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                if (p->isValidMove(i, j, grid, enPassantTarget)) {
+
+                    Piece* temp = grid[j][i];
+                    grid[j][i] = p;
+                    grid[y][x] = nullptr;
+
+                    bool safe = true;
+                    if (isKingInCheck(isWhiteTurn)) safe = false;
+
+                    if (safe && p->getName() == "King" && abs(i - x) == 2) {
+                        grid[y][x] = p; grid[j][i] = temp;
+                        if (isKingInCheck(isWhiteTurn)) safe = false;
+                        int midX = (x + i) / 2;
+                        if (isSquareAttacked(midX, y, !isWhiteTurn)) safe = false;
+                        grid[j][i] = p; grid[y][x] = nullptr;
+                    }
+
+                    grid[y][x] = p;
+                    grid[j][i] = temp;
+
+                    if (safe) possibleMoves.push_back(Vector2i(i, j));
+                }
+            }
+        }
+    }
+
+    //  DRAW FUNCTION FOR BETTER GUI
+    void draw(RenderWindow& window) {
+        for (int row = 0; row < BOARD_SIZE; ++row) {
+            for (int col = 0; col < BOARD_SIZE; ++col) {
+                RectangleShape tile(Vector2f(TILE_SIZE, TILE_SIZE));
+                tile.setPosition(Vector2f((float)col * TILE_SIZE, (float)row * TILE_SIZE));
+
+                // Modern Green/Cream Palette
+                if ((row + col) % 2 == 0) tile.setFillColor(Color(235, 236, 208));
+                else tile.setFillColor(Color(119, 149, 86));
+
+                // Highlight Selected Piece (Subtle Yellow)
+                if (selectedTile.x == col && selectedTile.y == row) {
+                    tile.setFillColor(Color(247, 247, 105, 200));
+                }
+
+                window.draw(tile); // Draw base tile first
+
+                // Draw Move Indicators OVER the tile
+                for (auto m : possibleMoves) {
+                    if (m.x == col && m.y == row) {
+                        bool isCapture = false;
+
+                        // Check Standard Capture
+                        if (grid[row][col] != nullptr) isCapture = true;
+
+                        // Check En Passant Capture
+                        if (!isCapture && selectedTile.x != -1) {
+                            Piece* p = grid[selectedTile.y][selectedTile.x];
+                            if (p && p->getName() == "Pawn" && m.x == enPassantTarget.x && m.y == enPassantTarget.y) {
+                                isCapture = true;
+                            }
+                        }
+
+                        if (isCapture) {
+                            // Red Ring for Captures
+                            float radius = TILE_SIZE / 2.0f - 5.0f;
+                            CircleShape ring(radius);
+                            ring.setFillColor(Color::Transparent);
+                            ring.setOutlineColor(Color(200, 50, 50, 200));
+                            ring.setOutlineThickness(6);
+                            ring.setPosition(Vector2f(col * TILE_SIZE + 5, row * TILE_SIZE + 5));
+                            window.draw(ring);
+                        }
+                        else {
+                            // Green Dot for Safe Moves
+                            float radius = TILE_SIZE / 6.0f;
+                            CircleShape dot(radius);
+                            dot.setFillColor(Color(50, 150, 50, 150)); // Semi-transparent green
+                            dot.setOrigin(Vector2f(radius, radius));
+                            dot.setPosition(Vector2f(col * TILE_SIZE + TILE_SIZE / 2, row * TILE_SIZE + TILE_SIZE / 2));
+                            window.draw(dot);
+                        }
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                if (grid[i][j] != nullptr) grid[i][j]->draw(window);
+            }
+        }
+    }
+};
+
+int main() {
+    RenderWindow window(VideoMode(Vector2u(TILE_SIZE * BOARD_SIZE, TILE_SIZE * BOARD_SIZE)), "DSOOP Chess Project");
+    window.setFramerateLimit(60);
+
+    Board chessBoard;
+
+    while (window.isOpen()) {
+        while (const auto event = window.pollEvent()) {
+            if (event->is<Event::Closed>()) window.close();
+        }
+        chessBoard.handleInput(window);
+        window.clear();
+        chessBoard.draw(window);
+        window.display();
+    }
+    return 0;
+}
